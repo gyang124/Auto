@@ -1,0 +1,484 @@
+%% self-defined setting
+make_video = 0;                 % 0: don't make the video; 1: make a video 
+video_name = 'DWA_dynamic';     % provide your own video name
+show_animation = true;          % true: show animiation; false: don't show
+load_conditions = 0;            % 1: load previous saved scenario; 0: generate a 
+new random scenario
+tol = 3;                        % intial min. distance between robot and obstacles
+%% basic setting requirement
+global dt simu_area             % global parameters can be directly used in other 
+functions
+x_pos = 2;
+y_pos = 2;
+hea_dir = pi/2;                 % heading angle
+vr = 0;
+vl = 0;
+rob_R = 2;                      % robot radius
+goal_x = 30;
+goal_y = 30; 
+num_Obst = 20;                  % number of obstacles
+goal_tol = 1;                   % tolerance to be considered as reaching goal
+dt = 0.1;                       % control cycle time (frequency of changing 
+velocity command) 
+simu_area= [0, 60, 0,60];       % simulation domain
+obs_r_min = 2;                  % obstacles' min raduis
+obs_r_max = 2;                  % obstacles' max raduis
+%% motor parameters
+KT = 0.5;                       % torque constant
+KB = 0.25;                      % generator effect coefficient
+damp_c=0.02;                    % viscous damping coefficient
+R=4;                            % motor armature resistance
+I=0.02;                         % moment of inetia
+TL = 1;                         % torque required to do the physical work
+Vol_limit = 20;                 % max. voltage of the power source
+%% robot's parameter & dynamic characteristics 
+Wheel_R = 0.1;                  % meter
+L = 2*rob_R*3/4;                % distance between two wheels
+width = 0.3;                    % wheel's width (doesn't affect simulation)
+vel = (vr+vl)/2;                % translational velocity
+ang_vel = (vr-vl)/L;            % angular velocity
+% Team Task #1: make a function to obtain max. motor rotation speed and time to 
+reach 99% of the max. speed
+[max_v, max_acc_t] = motor_maxV_fun(KT,KB,damp_c,R,I,TL,Vol_limit); 
+max_v = max_v*Wheel_R;          % meter/sec
+max_a = max_v/max_acc_t;        % max. translational velocity acceleration: need x 
+sec to reach max v
+%% navigation model parameters
+proj_time = 3;                  % projected future time period (which will be 
+needed to calculate the distance function in DWA)
+evalParam= [0.3, 0.3, 0.4, proj_time];  % DWA parameters (first three are weight 
+parameters for three subobjective functions)
+%% generate random simulation environment
+obst_pos = unifrnd(0,60,num_Obst,2);                % obstacle positions
+obst_R = unifrnd(obs_r_min,obs_r_max,1,num_Obst);   % fixed obstacle radius
+obs_dir = unifrnd(-pi,pi,1,num_Obst);               % obstacles' random heading 
+directions
+obs_v = max_v*0.5;                                  % obstacles' translational 
+velocity                            
+obst_V = obs_v*[cos(obs_dir)', sin(obs_dir)'];      % obstacles' velocity along x- 
+and y- axis
+%% video setting
+if make_video == 1
+    myVideo = VideoWriter(video_name,'MPEG-4');  %open video file
+    myVideo.FrameRate = 10;             % put how many frames in one second
+    open(myVideo);
+end
+%% Initially, goal and robot position must not be inside any obstacle
+t=0:0.01:2*pi;
+for k=1:num_Obst
+    r= obst_R(k)+rob_R+tol; c= obst_pos(k,:);
+    x1= cos(t)*r+c(1); y1= sin(t)*r+c(2);
+    inpoly_g= inpolygon(goal_x,goal_y,x1,y1);
+    inpoly_r= inpolygon(x_pos,y_pos,x1,y1);
+    while(inpoly_g || inpoly_r)        % goal or robot is inside an obstacle
+        obst_pos(k,:) = unifrnd(0,60,1,2);
+        c= obst_pos(k,:);
+        x1= cos(t)*r+c(1); y1= sin(t)*r+c(2);
+        inpoly_g= inpolygon(goal_x,goal_y,x1,y1);
+        inpoly_r= inpolygon(x_pos,y_pos,x1,y1);
+    end
+end
+%% save or load simulation environment
+if load_conditions == 0
+    save('DWA_moving_data','obst_pos','obst_R','obst_V','num_Obst');
+end
+if load_conditions == 1
+    load('DWA_moving_data','obst_pos','obst_R','obst_V','num_Obst');
+end
+%% prepre for simulation
+x=[x_pos, y_pos, hea_dir, vel, ang_vel]'; % use a vector representing robot's state
+goal=[goal_x, goal_y];
+result.x=[];                            % used to store robot's trajectory
+simu_time = 50/dt;                      % defined max. simulation time (50 seconds)
+break_simu_flag = 0;                    % index to break the simulation
+ 
+%% simulation loop
+vr0 = vr; vl0 = vl;                     % will need to update wheel's velocity at 
+each simulation step 
+for i=1:simu_time 
+    % DWA main function to return u: demanded optimal velocity vector (i.e., u(1): 
+translational and u(2): angular velocity of the robot)
+    % and traj: robot's projected trajecotry for all velcoity pairs 
+    [u,traj]=DynamicWindowApproach(x,rob_R, vr0, vl0, 
+max_v,max_a,L,goal,evalParam,obst_pos,obst_R,obst_V);
+    obst_pos = obst_pos+ obst_V*dt; % update obstacles' position
+    
+    %  convert to demanded wheel velocity from demanded trans. and angular velocity
+    vrd = (2*u(1)+L*u(2))/2;
+    vld = (2*u(1)-L*u(2))/2;  
+    
+    % Team Task #2: obtain actual dynamic response of wheel velocity (rad/sec) from
+current value to
+    % required value within the control cycle time
+    [vr_t, dt1] = 
+pid_dyna_fun(KT,KB,damp_c,R,I,TL,Vol_limit,vr0/Wheel_R,vrd/Wheel_R,dt); % right 
+wheel
+    [vl_t, dt2] = 
+pid_dyna_fun(KT,KB,damp_c,R,I,TL,Vol_limit,vl0/Wheel_R,vld/Wheel_R,dt); % left 
+wheel
+ 
+    % obtain actual dynamic responses of robot's translational and angular
+    % velcoity after controller design
+    u2(1,:) = (vr_t+vl_t)*Wheel_R/2;        % translational velocity
+    u2(2,:) = (vr_t-vl_t)*Wheel_R/L;        % angular velocity
+    x = tra_fun(x,u2,dt2);                  % update robot's position considering 
+actual dynamics 
+    
+    vr0 = vr_t(end)*Wheel_R;                % right wheel's actual velocity at the 
+end of this control cycle time
+    vl0 = vl_t(end)*Wheel_R;                % left wheel's actual velocity at the 
+end of this control cycle time
+    
+    % if obstacles go outside the boundary, reverse velocity to maintain same 
+number of obstacles in the simulation
+    for k=1:num_Obst
+        if obst_pos(k,1) < simu_area(1) || obst_pos(k,1) > simu_area(2) || 
+obst_pos(k,2) < simu_area(3) || obst_pos(k,2)>simu_area(4)
+            obst_V(k,:) = - obst_V(k,:);
+        end
+    end
+    
+    %update robot's trajectory
+    result.x=[result.x; x']; 
+    
+    % collision judgement
+    for k=1:num_Obst
+        dist_rob = distance([x(1),x(2)],obst_pos(k,:));
+        if dist_rob<= obst_R(k)+rob_R
+            disp('Collision with obstacle!!!');
+            break_simu_flag = 1;
+            break;              % exit this for loop
+        end 
+    end
+    
+    % collision with wall or not
+    dist_wall(1) = x(1)-rob_R-simu_area(1); % distance to x_min
+    dist_wall(2) = simu_area(2)-x(1)-rob_R; % distance to x_max
+    dist_wall(3) = x(2)-rob_R-simu_area(3); % distance to y_min
+    dist_wall(4) = simu_area(4)-x(2)-rob_R; % distance to y_max
+    if min(dist_wall)<0
+        disp('Collision with wall!!!');
+        break_simu_flag = 1;
+    end
+    
+    if break_simu_flag == 1
+        break;  % exit the simulation for loop
+    end
+    
+    %% show animation
+    if show_animation
+        hold off;
+        figure(1)
+        ax = gca;
+         
+        ArrowLength=x(4);%Arrow length
+        quiver(x(1),x(2),ArrowLength*cos(x(3)),ArrowLength*sin(x(3)));hold on;
+        
+        vis_fun(x(1),x(2),rob_R,x(3)*180/pi,L,width,Wheel_R); % show robot
+         
+        
+plot(result.x(:,1),result.x(:,2),'-','Color','#D95319','LineWidth',1.2);hold on;
+        plot(goal(1),goal(2),'*r');hold on;
+        for g=1:num_Obst % a different way to show obstacles
+            rectangle('Position',[obst_pos(g,1)-obst_R(g),obst_pos(g,2)-
+obst_R(g),...
+                obst_R(g)*2,obst_R(g)*2],'Curvature',[1,1],'FaceColor','k');hold 
+on;
+        end 
+        % Explored trajectories
+        if ~isempty(traj)
+            for it=1:length(traj(:,1))/5
+                ind=1+(it-1)*5;
+                plot(traj(ind,:),traj(ind+1,:),'-g');hold on;
+            end
+        end
+        X = sprintf('Time Spent: %.2f seconds!',i/10);
+        title(['DWA-',X])
+        axis(simu_area);
+        ax.FontSize = 16;
+        grid on;
+        drawnow;
+        
+        if norm(x(1:2)-goal')<goal_tol
+            text(goal(1),goal(2),'\leftarrow Arrived','Color','red','FontSize',14);
+hold on;
+        end
+        
+        if make_video == 1
+            frame = getframe(gcf); %get frame
+            writeVideo(myVideo, frame);
+        end
+    end
+    
+    %Goal judgment
+    if norm(x(1:2)-goal')<goal_tol
+        time_spent = i/10; % seconds
+        break;  % exit the simulation for loop
+    end 
+end
+if i == simu_time
+    fprintf('cannot reach goal position!\n');
+end
+if make_video ==1
+    close(myVideo)
+end
+%%%%%%%%%%%%%%%% end of main function %%%%%%%%%%%%%%%
+function [ang_v,dt] = pid_dyna_fun(KT,KB,f,R,I,TL,Vol_limit,ang_v,ang_tar,Time)
+% inputs: 
+% ang_v: current angular velocity of the wheel
+% ang_tar: target angular velocity
+% Time: total control time period
+% outputs: ang_v: dynamic response of wheel's angular velocity 
+% dt: control time scale. please set dt directly as 0.001 (i.e., dt = 0.001)
+%% PID design
+Kc = 50; Ki = 100; Kd = 0;     % PID controller coefficient 
+%% make continous angular velocity target every one sec
+time = linspace(0,Time,100);
+dt = time(2)-time(1);
+err_vol0 = ang_tar-ang_v;
+for k = 2:length(time) 
+    err_vol = ang_tar-ang_v(k-1);
+    
+    Vol1 = Kc*err_vol; 
+    Vol2 = Ki*sum(ang_tar-ang_v)*dt;
+    Vol3 = Kd*(err_vol-err_vol0)/dt;
+    Vol(k) = Vol1+Vol2+Vol3;
+    if Vol(k)>Vol_limit
+        Vol(k) = Vol_limit;
+    elseif Vol(k)<0
+        Vol(k) = 0;
+    end
+    
+    B = (KT*Vol(k)-R*TL)/(f*R+KT*KB);
+    C = ang_v(k-1) - B;
+    C2 = (f*R+KT*KB)/(I*R);
+    
+    ang_v(k) = B+C*exp(-C2*dt);
+    err_vol0 = err_vol;
+end
+% figure; hold on; grid on;
+% plot(time,ang_v,'linewidth',2);
+% figure; hold on; grid on;
+% plot(time,Vol,'linewidth',2);
+end
+function [max_v, max_acc_t] = motor_maxV_fun(KT,KB,f,R,I,TL,Vol_limit)
+%% make your own function here based on the inputs and outputs
+%  max_v is the max. achievable rotation velocity of the wheel in unit of
+%  rad/sec.; max_acc_t is time to reach 99% of the max. velocity in unit of
+%  seconds
+%% PID design
+Kc = 1; Ki = 5; Kd = 0;     % PID controller coefficient
+%% make continous angular velocity target every one sec
+ang_tar = 100;
+time = linspace(0,5,2000);
+dt = time(2)-time(1);
+ang_v=0;
+err_vol0 = ang_tar-ang_v;
+for k = 1:length(time)
+    err_vol = ang_tar-ang_v(k);
+    
+    Vol1 = Kc*(ang_tar-ang_v(k));
+    Vol2 = Ki*sum(ang_tar-ang_v)*dt;
+    Vol3 = Kd*(err_vol-err_vol0)/dt;
+    Vol(k) = Vol1+Vol2+Vol3;
+    if Vol(k)>Vol_limit
+        Vol(k) = Vol_limit;
+    end
+    
+    B = (KT*Vol(k)-R*TL)/(f*R+KT*KB);
+    C = ang_v(k) - B;
+    C2 = (f*R+KT*KB)/(I*R);
+    
+    ang_v(k+1) = B+C*exp(-C2*dt);
+    err_vol0 = err_vol;
+end
+max_v = ang_v(end);
+index = find(max_v-ang_v<0.01*max_v);
+max_acc_t = time(index(1));
+% figure; hold on; grid on;
+% plot(time,ang_v(2:end),'linewidth',2);
+% 
+% figure; hold on; grid on;
+% plot(time,Vol,'linewidth',2);
+end
+function vis_fun(x_pos,y_pos,radius,head_dir,L,width,R)
+hold off;
+rot_a = 90-head_dir;
+rot = [cosd(rot_a), -sind(rot_a)
+    sind(rot_a),  cosd(rot_a)];
+rectangle('Position',[x_pos-radius,y_pos-radius,radius*2,radius*2],'Curvature',
+[1,1],'FaceColor','y','linewidth',1);hold on;
+w1 = [-L/2, -L/2+width, -L/2+width, -L/2; -R, -R, R, R]';
+w1 = w1*rot;
+w1 = w1 + [x_pos, y_pos];
+wheel1 = polyshape(w1);
+plot(wheel1,'FaceColor','k'); hold on;
+w2 = [L/2-width, L/2, L/2, L/2-width; -R, -R, R, R]';
+w2 = w2*rot;
+w2 = w2 + [x_pos, y_pos];
+wheel2 = polyshape(w2);
+plot(wheel2,'FaceColor','k');  hold on;
+% viscircles([x_pos, y_pos],radius);
+% axis equal
+end
+%% DW functions
+function d = distance(pos1,pos2)
+d = sqrt((pos1(1)-pos2(1))^2 + (pos1(2)-pos2(2))^2);
+end
+function [u,trajDB]=DynamicWindowApproach(x,rob_R,vr, vl, 
+max_v,max_a,L,goal,evalParam,ob,R,V)
+global dt 
+% Team Task #3: generate translational and angular velocity samples based on two 
+wheels' velocity
+% samples
+[lin_v,ang_v] = conversion_fun(vr, vl,max_v,max_a,L);
+% obtain DWA three subobjective function value at corresponding velocity sampels 
+% evalDB: [translational velocity, angular velocity, heading value, dist value, 
+velocity value] 
+[evalDB,trajDB]=Evaluation(x,rob_R,lin_v,ang_v,goal,ob,R,V,evalParam);
+  
+% consider only admissiable velocity (without collision)
+temp = evalDB(evalDB(:,4)>=0,:);    
+if isempty(temp) % all velocity will lead to a collision
+    disp('all paths lead to collision!!');
+    % reduce velocity as much as possible
+    vr = max([vr-max_a*dt, 0]);
+    vl = max([vl-max_a*dt, 0]);
+    u(1) = (vr+vl)/2;
+    u(2) = (vr-vl)/L;
+    u = u';
+    return;
+end 
+%Normalize each evaluation function 
+evalDB=NormalizeEval(temp); 
+%overall objective function
+feval = evalParam(1:3)*evalDB(:,3:5)';
+[~,index]=max(feval);   % find index of the max. value
+u=evalDB(index,1:2)';   % Returns the corresponding robot velocity
+end
+function [v,ang_v] = conversion_fun(vr, vl, max_v,max_a,L)
+global dt       % you will need this dt value to find reachable velocity range for 
+two wheels
+%% make your remaining code 
+% v: tranlational velocity samples (nxn matrix)
+% ang_v: angular velocity samples  (nxn matrix)
+ 
+vr_range = [max(vr-max_a*dt,0),min(vr+max_a*dt,max_v)];
+vl_range = [max(vl-max_a*dt,0),min(vl+max_a*dt,max_v)];
+sample = 6;
+vr_s = linspace(vr_range(1),vr_range(2),sample);
+vl_s = linspace(vl_range(1),vl_range(2),sample);
+for k1 = 1:sample
+    for k2 = 1:sample
+        v(k1,k2) = (vr_s(k1)+vl_s(k2))/2;
+        ang_v(k1,k2) = (vr_s(k1)-vl_s(k2))/L;
+    end
+end
+end
+function [evalDB,trajDB]=Evaluation(x,rob_R,lin_v,ang_v,goal,ob,R,V,evalParam)
+evalDB=[];
+trajDB=[];
+[n1, n2] = size(lin_v);
+for k1=1:n1
+    for k2 = 1:n2
+        vt = lin_v(k1,k2);
+        ot = ang_v(k1,k2);
+        % generate robot's trajectory given current state x, velocity (vt,ot), and 
+projected time evalParam(4)
+        % xt: final state of the robot at the end of the projection time
+        % traj: robot state history
+        [xt,traj]=GenerateTrajectory(x,vt,ot,evalParam(4)); 
+        % Team Task #4: heading direction evaluation function
+        heading=CalcHeadingEval(xt,goal);  
+        % Team Task #5: distance evaluation function
+        dist = CalcDistEval(traj,rob_R,ob,R,V,evalParam(4));  
+        % velocity evaluation function
+        vel=abs(vt);   
+        
+        evalDB=[evalDB;[vt ot heading dist vel]];
+        trajDB=[trajDB;traj];
+    end
+end
+end
+function EvalDB=NormalizeEval(EvalDB)
+%Function to normalize the evaluation value
+if max(EvalDB(:,3))~=0
+    EvalDB(:,3)=EvalDB(:,3)/max(EvalDB(:,3));
+end
+if max(EvalDB(:,4))~=0
+    EvalDB(:,4)=EvalDB(:,4)/max(EvalDB(:,4));
+end
+if max(EvalDB(:,5))~=0 
+    EvalDB(:,5)=EvalDB(:,5)/max(EvalDB(:,5));
+end
+end
+function [x,traj]=GenerateTrajectory(x,vt,ot,evaldt)
+global dt;
+time=0;
+u=[vt;ot];          % Input value 
+traj=x;             % Trajectory data
+while time<=evaldt
+    time=time+dt;   % update simulation time
+    x=f(x,u);       % state update function
+    traj=[traj x];  % store state history
+end 
+end
+function dist = CalcDistEval(x,rob_R,ob,R,V,pro_t)
+%% calculate your distance function value here
+%Function to calculate distance evaluation value with obstacle
+global dt;
+global simu_area;   
+for k=1:length(ob(:,1))
+    ob_traj = ob(k,:) + [0:dt:pro_t]'*V(k,:);       % obstacle's trajectory
+    dis_v = ob_traj-x(1:2,:)';                      % distance vector to obstacles 
+within the projected time
+    dis_traj = sqrt(dis_v(:,1).^2+dis_v(:,2).^2);   % distance to obstacles within 
+the projected time
+    dis_act = dis_traj - R(k)-rob_R;
+    dist(k) = min(dis_act);                         % the shortest distance within 
+the projected time
+    index = find(dis_act<0);
+end  
+dist(k+1) = min(x(1,:)-rob_R-simu_area(1)); % distance to x_min
+dist(k+2) = min(simu_area(2)-x(1,:)-rob_R); % distance to x_max
+dist(k+3) = min(x(2,:)-rob_R-simu_area(3)); % distance to y_min
+dist(k+4) = min(simu_area(4)-x(2,:)-rob_R); % distance to y_max
+ 
+dist = min(dist); % larger the better 
+end
+function heading=CalcHeadingEval(x,goal)
+%% calculate your heading direction value
+%Function to calculate the evaluation function of heading
+theta=toDegree(x(3));%Robot orientation
+goalTheta=toDegree(atan2(goal(2)-x(2),goal(1)-x(1)));%Orientation of the goal
+targetTheta=abs(goalTheta-theta);%Direction difference to goal[deg]
+heading=180-targetTheta;  % larger the better
+end
+function x = f(x, u)
+% Motion Model
+global dt; 
+ue = (x(4:5)+u)/2; 
+B = [dt*cos(x(3)) 0     % x-direction position change
+    dt*sin(x(3)) 0      % y-direction position change
+    0 dt];                % angular change;
+x(1:3) = x(1:3)+B*ue;
+x(4:5) = u; 
+end
+function x = tra_fun(x, u, dt1)
+% Motion Model
+n = size(u,2); 
+for k = 1:n
+    ue = (x(4:5)+u(:,k))/2;
+    
+    B = [dt1*cos(x(3)) 0     % x-direction position change
+        dt1*sin(x(3)) 0      % y-direction position change
+        0 dt1];                % angular change;
+    
+    x(1:3) = x(1:3)+B*ue;
+    x(4:5) = u(:,k);
+end
+end
+function degree = toDegree(radian)
+% radian to degree
+degree = radian/pi*180;
+end
