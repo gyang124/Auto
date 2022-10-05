@@ -1,0 +1,88 @@
+import ikpy.chain as inv
+import ikpy.utils.plot as plot_utils
+import numpy as np
+import matplotlib.pyplot as plt
+import serial
+import time
+def submit_degrees(joint_angles, clampNumber, ArduinoSerial):
+    time.sleep(8)
+    ang1, ang2, ang3, ang4, ang5 = joint_angles
+
+    ArduinoSerial.write(str(ang1).encode())  # Send the the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+    ArduinoSerial.write(str(ang2).encode())  # Send the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+    ArduinoSerial.write(str(ang3).encode())  # Send the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+    ArduinoSerial.write(str(ang4).encode())  # Send the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+    ArduinoSerial.write(str(ang5).encode())  # Send the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+    ArduinoSerial.write(str(clampNumber).encode())  # Send the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+
+class Kinematics:
+    def __init__(self):
+        self.chain = inv.Chain.from_urdf_file('braccio_1.urdf')
+
+    def findAngle(self, target):
+        angles = self.chain.inverse_kinematics(target)[1:6]
+        radToDegrees = 180 / np.pi
+        anglesDegrees = angles*radToDegrees
+        return anglesDegrees
+        
+class Robot:
+    def __init__(self):
+        self.angles = np.array([90,45,180,180,90])
+        self.createSerial = serial.Serial('COM3', 9600)
+        self.c = Kinematics()
+        self.clamp = 10
+        
+    def findPositionAngles(self, target):
+        
+        self.angles = self.c.findAngle(target)
+        submit_degrees(self.angles, self.clamp, self.createSerial)
+
+    def grabBlock(self, target):
+        self.findPositionAngles(target)
+        self.clamp = 73
+        submit_degrees(self.angles, self.clamp, self.createSerial)
+
+    def releaseblock(self, target):
+        self.findPositionAngles(target)
+        self.clamp = 10
+        submit_degrees(self.angles, self.clamp, self.createSerial)
+
+    def moveToDefault(self):
+        self.angles = np.array([90,45,180,180,90])
+        
+        submit_degrees(self.angles, self.clamp, self.createSerial)
+        self.clamp = 10
+        submit_degrees(self.angles, self.clamp, self.createSerial)
+        
+        
+
+def test(target):
+    my_chain = inv.Chain.from_urdf_file("braccio_1.urdf")
+
+    angle = my_chain.inverse_kinematics(target)
+    real_frame = my_chain.forward_kinematics(angle)
+    print("Computed position vector : %s, original position vector : %s" % (real_frame[:3, 3], target_position))
+
+    distance = np.linalg.norm(target_position - real_frame[:3, 3])
+    print(f'distance between computed position and desired position: {distance}')
+    print(f'control signals: {np.array(angle[1:6]) * 180 / np.pi}')
+
+    # 3D plotting 
+    fig, ax = plot_utils.init_3d_figure()
+    my_chain.plot(angle, ax, target=target)
+    k = 0.25
+    plt.xlim(-k, k)
+    plt.ylim(-k, k)
+    ax.set_zlim(-k, k)
+    plt.show()
+
+
+if __name__ == '__main__':
+    target = np.array([0.2, 0, 0.112] )
+    test(target)
