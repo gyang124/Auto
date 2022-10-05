@@ -1,0 +1,100 @@
+import ikpy.chain
+import ikpy.utils.plot as plot_utils
+import numpy as np
+import serial         
+import time
+
+def submit_degrees(joint_angles, m6, ArduinoSerial):
+    time.sleep(10)
+    m1, m2, m3, m4, m5 = joint_angles
+    print(m1, m2, m3, m4, m5, m6 )
+    ArduinoSerial.write(str(m1).encode())  # Send the the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+    ArduinoSerial.write(str(m2).encode())  # Send the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+    ArduinoSerial.write(str(m3).encode())  # Send the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+    ArduinoSerial.write(str(m4).encode())  # Send the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+    ArduinoSerial.write(str(m5).encode())  # Send the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+    ArduinoSerial.write(str(m6).encode())  # Send the number of degrees to Arduino
+    ArduinoSerial.write(','.encode())
+
+
+class BraccioRobot:
+    def __init__(self):
+        self.joint_angles = np.array([90, 45, 180, 180, 90])
+        self.gripper = 10
+        self.ik_solver = Kinematics()
+        self.ArduinoSerial = serial.Serial('COM3', 9600)     # Creating our Arduino serial object
+
+    def move_to_position(self, target_position):
+        self.joint_angles = self.ik_solver.compute_angles(target_position)
+        submit_degrees(self.joint_angles, self.gripper, self.ArduinoSerial)
+
+    def close_gripper(self):
+        self.gripper = 73 # gripper is closed.
+        submit_degrees(self.joint_angles, self.gripper, self.ArduinoSerial)
+
+    def open_gripper(self):
+        self.gripper = 10 # gripper is open.
+        submit_degrees(self.joint_angles, self.gripper, self.ArduinoSerial)
+
+    def grasp_block(self, target_position):
+        
+        self.move_to_position(target_position)
+        self.close_gripper()
+
+
+    def release_block(self, target_position):
+    
+        self.move_to_position(target_position)
+        self.open_gripper()
+
+    def release_to_default_pos(self):
+        self.joint_angles = np.array([90, 45, 180, 180, 90])
+        submit_degrees(self.joint_angles, self.gripper, self.ArduinoSerial)
+        self.gripper = 10 # gripper is open.
+        submit_degrees(self.joint_angles, self.gripper, self.ArduinoSerial)
+
+      
+
+class Kinematics:
+    def __init__(self):
+        self.chain = ikpy.chain.Chain.from_urdf_file("braccio_1.urdf")
+
+    def compute_angles(self, target_position):
+        angles_rad = self.chain.inverse_kinematics(target_position)[1:6]
+        return angles_rad * 180 / np.pi
+ 
+        
+def test():
+    my_chain = ikpy.chain.Chain.from_urdf_file("braccio_1.urdf") 
+
+
+    target_position = np.array([0.18, -0.05, 0.106] )
+    print("The angles of each joints are : ", my_chain.inverse_kinematics(target_position))
+
+    real_frame = my_chain.forward_kinematics(my_chain.inverse_kinematics(target_position))
+    print("Computed position vector : %s, original position vector : %s" % (real_frame[:3, 3], target_position))
+
+    angles = my_chain.inverse_kinematics(target_position)
+    print(np.array(angles[1:6]) * 180 / np.pi)
+
+    distance = np.linalg.norm(real_frame[:3, 3]- target_position)
+    print(f'distance is {distance}')
+    # Optional: support for 3D plotting 
+    import matplotlib.pyplot as plt
+    fig, ax = plot_utils.init_3d_figure()
+    # my_chain.plot(my_chain.inverse_kinematics(target_position), ax, target=target_position)
+    my_chain.plot(angles, ax, target=real_frame[:3, 3])
+    k = 0.3
+    plt.xlim(-k, k)
+    plt.ylim(-k, k)
+    ax.set_zlim(-k, k)
+    plt.show()
+
+
+if __name__ == '__main__':
+    test()
