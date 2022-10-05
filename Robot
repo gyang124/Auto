@@ -1,0 +1,42 @@
+import serial, time
+from image_process import object_segment
+from inverse_kinematics import BraccioRobot
+import numpy as np
+import cv2
+
+Z = 0.1055
+
+
+def main():
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Cannot open camera")
+        exit()
+
+    arm = BraccioRobot()
+    time.sleep(15)
+    while(True):
+        ret, frame = cap.read()
+        positions, num_obj, image1 = object_segment(frame)
+
+        if len(positions['green']) > 0:
+            pos = positions['green'][0]
+            target_pos = np.append(pos, Z)
+            print(target_pos)
+            if target_pos[0] > 0.23 or target_pos[1] > 0.15 or target_pos[0] < 0:
+                print('unsafe')
+                break
+
+            arm.grasp_block(target_pos)
+            arm.release_to_default_pos()
+
+        if num_obj == 0:
+            print('completed')
+            break
+
+    # When everything done, release the capture
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == '__main__':
+    main()
