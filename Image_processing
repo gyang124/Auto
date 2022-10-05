@@ -1,0 +1,192 @@
+import cv2
+import imutils
+import numpy as np
+import keyboard
+import time
+
+def get_aruco_corner(image):
+    """
+    detect ArUco marker
+        input: image
+        output: ArUco marker's position in image, number of detected ArUco marker
+    """
+    arucoDict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_1000)
+    arucoParams = cv2.aruco.DetectorParameters_create()
+    (corners, ids, rejected) = cv2.aruco.detectMarkers(image, arucoDict,
+        parameters=arucoParams)
+    srcTri = []
+    # verify *at least* one ArUco marker was detected
+    if len(corners) > 0:
+        # flatten the ArUco IDs list
+        ids = ids.flatten()
+        i = np.argsort(ids)
+        # loop over the detected ArUCo corners
+        for j in i:
+            markerID = ids[j]   
+            markerCorner = corners[j][0] 
+            # extract the marker corners (which are always returned in
+            # top-left, top-right, bottom-right, and bottom-left order)
+            markerCorner = markerCorner.reshape((4, 2))
+            (topLeft, topRight, bottomRight, bottomLeft) = markerCorner
+            # convert each of the (x, y)-coordinate pairs to integers
+            topRight = (int(topRight[0]), int(topRight[1]))
+            bottomRight = (int(bottomRight[0]), int(bottomRight[1]))
+            bottomLeft = (int(bottomLeft[0]), int(bottomLeft[1]))
+            topLeft = (int(topLeft[0]), int(topLeft[1]))
+
+            if markerID == 0:
+                srcTri.append(bottomLeft)
+            elif markerID == 134:
+                srcTri.append(topLeft) 
+            elif markerID == 325:
+                srcTri.append(topRight) 
+            elif markerID == 333:
+                srcTri.append(bottomRight)
+    return srcTri, len(corners)
+
+
+def transform(image):
+    """
+    perspective transform
+        input: original image
+        output: corrected image 
+    """
+    srcTri, num_corners = get_aruco_corner(image)
+    if num_corners == 4:
+        # Coordinates that you want to Perspective Transform
+        pts1 = np.array(srcTri).astype(np.float32)
+        # Size of the Transformed Image
+        h = 263
+        w = 202
+        pts2 = np.float32([[0, h], [0, 0], [w, 0], [w, h]])
+        M = cv2.getPerspectiveTransform(pts1,pts2)
+        dst = cv2.warpPerspective(image,M,(w,h))
+        cv2.imwrite('warp.jpg', dst)
+        return dst
+    else:
+        print('markers not detected')
+        return image
+
+
+def find_cnts(image):
+    """
+    find contours
+        input: image
+        output: contours
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    thresh = cv2.threshold(blurred, 4,30, cv2.THRESH_BINARY)[1]
+    # find contours in the thresholded image
+    cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    return cnts
+
+def object_segment(image):
+    """
+    object segment using HSV color range
+        input: image
+        output: positions of colored objects, 
+                number of detected objects,
+                image with drawn contours and centers  
+    """
+    image = transform(image)
+    original_image = image.copy()
+
+    hsvImage = cv2.cvtColor(original_image, cv2.COLOR_BGR2HSV)
+
+    # TODO
+    # HSV range for each color
+     # hue saturation value
+    lower_blue = np.array([100,80,40])
+    upper_blue = np.array([110,255,255])
+
+    lower_red = np.array([140,40,40])
+    upper_red = np.array([180,255,255])
+
+    lower_green = np.array([70,50,50])
+    upper_green = np.array([95,255,255])
+
+    lower_yellow = np.array([10,40,50])
+    upper_yellow = np.array([40,255,255])
+
+
+    lower_purple = np.array([110,40,50])
+    upper_purple = np.array([135,255,255])
+   
+
+  
+    # TODO
+    color_range = {'red': (lower_red, upper_red), 
+                'green': (lower_green, upper_green), 
+                'blue': (lower_blue, upper_blue),
+                'yellow': (lower_yellow, upper_yellow),
+                'purple': (lower_purple, upper_purple)}
+    color_position = {'red': [], 
+                'green': [], 
+                'blue': [],
+                'yellow': [],
+                'purple':[]}
+
+    num_obj = 0
+    for color in ( 'green', 'blue', 'red', 'yellow', 'purple'):
+        mask = cv2.inRange(hsvImage, color_range[color][0], color_range[color][1])
+        result = original_image.copy()
+        result = cv2.bitwise_and(result, result, mask=mask)
+        cv2.imwrite(color + '.jpg', result) #
+        cnts = find_cnts(result)
+
+        # loop over the contours
+        for c in cnts:
+            # compute the center of the contour
+            M = cv2.moments(c)
+            print(M["m00"])
+            if M["m00"] < 200:
+                continue
+        
+            cX = int(M["m10"] / M["m00"])
+            cY = int(M["m01"] / M["m00"])
+            # draw the contour and center of the shape on the image
+            cv2.drawContours(image, [c], -1, (0, 255, 0), 2)
+            cv2.circle(image, (cX, cY), 7, (255, 255, 255), -1)
+            cv2.putText(image, color, (cX - 20, cY - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            # color_position[color].append([(202 - cX) / 1000 + 0.06, (cY - 131.5)/ 1000])
+            # color_position[color].append([(202 - cX) / 1000 + 0.075, (cY - 131.5) / 1000 + 0.08])
+            color_position[color].append([cX, cY])
+            num_obj += 1
+    
+    # # save the image
+    cv2.imwrite('segmentation.jpg', image)
+    print(color_position)
+    return color_position, num_obj, image
+
+
+def main():
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Cannot open camera")
+        exit()
+
+    while(True):
+        # print('-----')
+        # time.sleep(10)
+        ret, frame = cap.read()
+        cv2.imwrite('test.jpg',frame)
+        positions, num_obj, image1 = object_segment(frame)
+        # cv2.imshow('frame', image1)
+        # if num_obj == 0: #
+        break
+    #    if cv2.waitKey(1) == ord('q'): #
+    #     if keyboard.is_pressed('q'):  # if key 'q' is pressed 
+    #         break
+
+    # When everything done, release the capture
+    cap.release()
+    cv2.destroyAllWindows()
+    
+ 
+if __name__ == '__main__':
+    main()
